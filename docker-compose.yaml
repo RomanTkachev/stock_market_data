@@ -75,11 +75,11 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ./../analytics:/opt/airflow/analytics
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/plugins:/opt/airflow/plugins
+    - ./analytics:/opt/airflow/analytics
     - /var/run/docker.sock:/var/run/docker.sock
   #user: "${AIRFLOW_UID:-50000}:0"
   user: "0:0"
