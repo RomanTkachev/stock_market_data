@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: stock_market_raw 
+    schema: stock_market 
+    tables:
+      - name: prices_yfinance
+      - name: prices_moex
+      - name: instruments

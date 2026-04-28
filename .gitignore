@@ -1,0 +1,38 @@
+#local environments
+airflow_setup/.env
+.env
+
+# Airflow runtime artifacts
+airflow_setup/logs/
+airflow_setup/tmp/
+airflow_setup/airflow.db
+airflow_setup/unittests.db
+
+# dbt local files
+
+analytics/target/
+analytics/dbt_packages/
+analytics/logs/
+analytics/profiles.yml
+analytics/.user.yml
+
+# Configs with secrets
+airflow_setup/airflow.cfg
+airflow_setup/webserver_config.py
+
+# SQL sessions 
+*.sql
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor/OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

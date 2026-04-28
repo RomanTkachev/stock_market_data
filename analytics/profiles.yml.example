@@ -1,0 +1,15 @@
+config:
+  send_anonymous_usage_stats: false
+
+analytics:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST') }}"
+      port: 5432
+      user: "{{ env_var('DB_USER') }}"
+      pass: "{{ env_var('DB_PASS') }}"
+      dbname: "{{ env_var('DB_NAME') }}"
+      schema: stock_market
+      threads: 4

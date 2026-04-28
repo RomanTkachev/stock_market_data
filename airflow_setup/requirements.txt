@@ -1,0 +1,8 @@
+apache-airflow-providers-postgres
+apache-airflow-providers-docker
+yfinance
+pandas
+SQLAlchemy
+python-dotenv
+pendulum
+moexalgo
