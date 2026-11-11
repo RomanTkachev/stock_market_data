@@ -118,6 +118,8 @@ docker compose run --rm dbt run
 docker compose run --rm dbt test
 ```
 
+> Сервис `dbt` собирается из того же образа, что и Airflow. В `docker compose up` он выполняет только `dbt --version` и завершается — он нужен для ручных запусков выше.
+
 ## База с рыночными данными
 
 Сервис `market-postgres` создаёт схему `stock_market` и таблицы `prices_moex`, `prices_yfinance`, `instruments` скриптами из `infra/initdb` при **первой** инициализации тома.
