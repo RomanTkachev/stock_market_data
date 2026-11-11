@@ -5,11 +5,24 @@ import pendulum
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
-from airflow.models import Variable
 
 # Имена исходных DAG-ов из твоих файлов
 SOURCE_DAG_MOEX = "daily_moex_data_loader"
 SOURCE_DAG_YFINANCE = "daily_nyse_data_loader"
+
+# dbt-postgres ставится в образ Airflow (см. requirements.txt), а проект analytics
+# примонтирован томом в /opt/airflow/analytics, поэтому отдельный контейнер не нужен
+DBT_PROJECT_DIR = "/opt/airflow/analytics"
+
+
+def dbt_command(subcommand: str) -> str:
+    """Собирает команду dbt для запуска внутри контейнера Airflow."""
+    return (
+        f"dbt {subcommand} "
+        f"--project-dir {DBT_PROJECT_DIR} "
+        f"--profiles-dir {DBT_PROJECT_DIR}"
+    )
+
 
 with DAG(
     dag_id="run_dbt_after_sources",
@@ -28,14 +41,14 @@ with DAG(
     1. Ждёт успешного завершения:
        - `daily_moex_data_loader`
        - `daily_nyse_data_loader`
-    2. Запускает `dbt run` в контейнере Airflow.
-    
+    2. Запускает `dbt run` и `dbt test` в контейнере Airflow (dbt установлен в образ).
+
     Зависимости:
     - Данные должны быть загружены до запуска dbt.
     - Использует `ExternalTaskSensor` для ожидания.
     """,
 ) as dag:
-    
+
     # --- Ждём завершения MOEX DAG ---
     wait_for_moex = ExternalTaskSensor(
         task_id="wait_for_moex_dag",
@@ -50,7 +63,7 @@ with DAG(
         soft_fail=False,
     )
 
-     # --- Ждём завершения yfinance DAG ---
+    # --- Ждём завершения yfinance DAG ---
     wait_for_yfinance = ExternalTaskSensor(
         task_id="wait_for_yfinance_dag",
         external_dag_id=SOURCE_DAG_YFINANCE,
@@ -65,27 +78,16 @@ with DAG(
     )
 
     dbt_run = BashOperator(
-    task_id="dbt_run",
-    bash_command="""
-      docker run --platform linux/amd64 --rm \
-        -v /Users/notbad/Documents/Projects/finance_project/analytics:/app \
-        -w /app \
-        -e DBT_PROFILES_DIR=/app \
-        ghcr.io/dbt-labs/dbt-postgres:1.9.0 \
-        run
-    """,
+        task_id="dbt_run",
+        bash_command=dbt_command("run"),
+        # append_env=True нужен, чтобы задача унаследовала DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME
+        append_env=True,
     )
 
     dbt_test = BashOperator(
-    task_id="dbt_test",
-    bash_command="""
-      docker run --platform linux/amd64 --rm \
-        -v /Users/notbad/Documents/Projects/finance_project/analytics:/app \
-        -w /app \
-        -e DBT_PROFILES_DIR=/app \
-        ghcr.io/dbt-labs/dbt-postgres:1.9.0 \
-        test
-    """,
+        task_id="dbt_test",
+        bash_command=dbt_command("test"),
+        append_env=True,
     )
 
     # Порядок выполнения

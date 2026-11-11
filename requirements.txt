@@ -32,5 +32,7 @@ urllib3==2.5.0
 websockets==15.0.1
 yfinance==0.2.66
 apache-airflow-providers-postgres
-apache-airflow-providers-docker
 pendulum
+# dbt запускается из образа Airflow (см. airflow_setup/dags/orchestrate_dbt_pipline.py)
+dbt-core==1.9.10
+dbt-postgres==1.9.0

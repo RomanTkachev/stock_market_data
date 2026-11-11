@@ -87,7 +87,6 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/airflow_setup/plugins:/opt/airflow/plugins
     - ./analytics:/opt/airflow/analytics
-    - /var/run/docker.sock:/var/run/docker.sock
   #user: "${AIRFLOW_UID:-50000}:0"
   user: "0:0"
   depends_on:
@@ -378,26 +377,22 @@ services:
       MB_DB_FILE: /metabase-data/metabase.db
     restart: always
   
-  # отдельным контейнером dbt https://hub.docker.com/r/dbt/dbt-core dbt-core + dbt-postgres
+  # dbt собирается из того же образа, что и Airflow (dbt-postgres ставится в dockerfile),
+  # поэтому DAG-у не нужен docker-in-docker. Сервис удобен для ручных запусков:
+  #   docker compose run --rm dbt run
+  #   docker compose run --rm dbt test
   dbt:
-    image: ghcr.io/dbt-labs/dbt-postgres:1.9.0
-    platform: linux/amd64
-    container_name: airflow-dbt
-    volumes:
-      - ./analytics:/app
-    working_dir: /app
+    <<: *airflow-common
+    entrypoint: dbt
+    command: ["--version"]
+    working_dir: /opt/airflow/analytics
     environment:
-      - DBT_PROFILES_DIR=/app
-      - DBT_TARGET=dev
-      - DB_HOST=${DB_HOST:-market-postgres}
-      - DB_PORT=${DB_PORT:-5432}
-      - DB_USER=${DB_USER:-market}
-      - DB_PASS=${DB_PASS:-market}
-      - DB_NAME=${DB_NAME:-market}
-    restart: on-failure
+      <<: *airflow-common-env
+      DBT_PROFILES_DIR: /opt/airflow/analytics
+      DBT_TARGET: dev
+    restart: "no"
     depends_on:
-      postgres:
-        condition: service_healthy
+      <<: *airflow-common-depends-on
 
 volumes:
   postgres-db-volume:
