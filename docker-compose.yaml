@@ -53,7 +53,14 @@ x-airflow-common:
   build: .
   environment:
     &airflow-common-env
-    DATABASE_URL: ${DATABASE_URL} #Прокидываем переменную окружения с данными postgre
+    # Строка подключения для загрузчиков (dags/scripts/*_loader.py). По умолчанию — сервис market-postgres
+    DATABASE_URL: ${DATABASE_URL:-postgresql://market:market@market-postgres:5432/market}
+    # Параметры БД с рыночными данными: их использует dbt (analytics/profiles.yml через env_var)
+    DB_HOST: ${DB_HOST:-market-postgres}
+    DB_PORT: ${DB_PORT:-5432}
+    DB_USER: ${DB_USER:-market}
+    DB_PASS: ${DB_PASS:-market}
+    DB_NAME: ${DB_NAME:-market}
     MOEX_API_TOKEN: ${MOEX_API_TOKEN} #Прокидываем переменную окружения с данными токена API Мосбиржи
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -89,8 +96,11 @@ x-airflow-common:
       condition: service_healthy
     postgres:
       condition: service_healthy
+    market-postgres:
+      condition: service_healthy
 
 services:
+  # PostgreSQL с метаданными Airflow (Airflow пересоздаёт его содержимое, рыночные данные здесь не хранятся)
   postgres:
     image: postgres:16
     environment:
@@ -101,6 +111,28 @@ services:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # PostgreSQL с рыночными данными: схема stock_market создаётся из infra/initdb
+  market-postgres:
+    image: postgres:16
+    container_name: market-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-market}
+      POSTGRES_PASSWORD: ${DB_PASS:-market}
+      POSTGRES_DB: ${DB_NAME:-market}
+    # Порт публикуется на хост, чтобы подключаться из IDE/psql и из Metabase не только по имени сервиса
+    ports:
+      - "${DB_HOST_PORT:-5433}:5432"
+    volumes:
+      - market-db-volume:/var/lib/postgresql/data
+      # Скрипты из этой папки выполняются ТОЛЬКО при первой инициализации пустого тома
+      - ./infra/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-market} -d ${DB_NAME:-market}"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -364,4 +396,5 @@ services:
 
 volumes:
   postgres-db-volume:
+  market-db-volume:
   metabase:
