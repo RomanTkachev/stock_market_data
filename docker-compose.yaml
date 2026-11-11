@@ -390,6 +390,8 @@ services:
       <<: *airflow-common-env
       DBT_PROFILES_DIR: /opt/airflow/analytics
       DBT_TARGET: dev
+      # entrypoint здесь переопределён, поэтому user-site добавляем сами (как это делает /entrypoint для root)
+      PYTHONPATH: /home/airflow/.local/lib/python3.12/site-packages
     restart: "no"
     depends_on:
       <<: *airflow-common-depends-on
