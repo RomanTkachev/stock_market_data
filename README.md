@@ -7,8 +7,8 @@
 - **Ежедневная загрузка котировок MOEX** (API Algopack / `moexalgo`) → схема `stock_market`, таблица `prices_moex`.
 - **Ежедневная загрузка данных Yahoo Finance**: акции, криптовалюты, фиатные валюты → таблица `prices_yfinance`.
 - **Инкрементальная загрузка**: в БД попадают только новые даты; пропуски по календарю (выходные) заполняются forward/back fill.
-- **Оркестрация dbt**: отдельный DAG ждёт успешного завершения загрузчиков и запускает `dbt run` и `dbt test`.
-- **Локальный стек в Docker**: Airflow (CeleryExecutor), PostgreSQL, Redis, Metabase, контейнер dbt.
+- **Оркестрация dbt**: отдельный DAG ждёт успешного завершения загрузчиков и запускает `dbt run` и `dbt test` (dbt установлен в образ Airflow).
+- **Локальный стек в Docker**: Airflow (CeleryExecutor), PostgreSQL с метаданными Airflow, PostgreSQL с рыночными данными (`market-postgres`), Redis, Metabase.
 
 ## Архитектура
 
@@ -25,25 +25,26 @@
 │         08:00 MSK daily                    │
 └────────────────────┬───────────────────────┘
                      ▼
-         ┌───────────────────────┐
-         │  PostgreSQL (внешняя)  │
-         │  schema: stock_market  │
-         │  prices_moex           │
-         │  prices_yfinance       │
-         └───────────┬────────────┘
+         ┌──────────────────────────────┐
+         │  PostgreSQL market-postgres  │
+         │  schema: stock_market        │
+         │  prices_moex                 │
+         │  prices_yfinance             │
+         │  instruments                 │
+         └───────────┬──────────────────┘
                      ▼
-         ┌───────────────────────┐
-         │  dbt (analytics/)      │
-         │  run_dbt_after_sources │
-         │         09:00 MSK      │
-         └───────────┬────────────┘
+         ┌────────────────────────────────┐
+         │  dbt (в образе Airflow)        │
+         │  run_dbt_after_sources         │
+         │  09:00 MSK                     │
+         └───────────┬────────────────────┘
                      ▼
          ┌───────────────────────┐
          │  Metabase (:3000)     │
          └───────────────────────┘
 ```
 
-> **Примечание.** В `docker-compose` поднимается отдельный PostgreSQL для метаданных Airflow. Хранилище рыночных данных задаётся переменной `DATABASE_URL` (обычно внешняя БД).
+> **Примечание.** В `docker-compose` поднимаются две независимые базы: `postgres` — метаданные Airflow (внутренняя, наружу не публикуется) и `market-postgres` — рыночные данные со схемой `stock_market` (порт `5433` на хосте). Схема и таблицы создаются bootstrap-скриптами из `infra/initdb`.
 
 ## Стек технологий
 
@@ -52,9 +53,9 @@
 | Оркестрация | Apache Airflow 3.1.0 (CeleryExecutor) |
 | Загрузка MOEX | [moexalgo](https://github.com/moexalgo/moexalgo) |
 | Загрузка US/crypto/FX | [yfinance](https://github.com/ranaroussi/yfinance) |
-| Трансформации | dbt-core + dbt-postgres 1.9.0 |
+| Трансформации | dbt-core + dbt-postgres 1.9.x (внутри образа Airflow) |
 | Визуализация | Metabase |
-| БД | PostgreSQL |
+| БД | PostgreSQL 16 (метаданные Airflow + `market-postgres` с рыночными данными) |
 | Контейнеризация | Docker Compose |
 
 ## DAG-и Airflow
@@ -70,7 +71,7 @@
 - Docker и Docker Compose
 - Рекомендуется ≥ 4 GB RAM и 2 CPU для Airflow (см. предупреждения в `docker-compose`)
 - Токен API Московской биржи (Algopack) для MOEX
-- Доступная PostgreSQL-база со схемой `stock_market` и таблицами для загрузки
+- Внешняя PostgreSQL не нужна: база с рыночными данными поднимается в контейнере `market-postgres`
 
 ## Быстрый старт
 
@@ -85,18 +86,15 @@ cp .env.example .env
 | Переменная | Назначение |
 |------------|------------|
 | `DATABASE_URL` | Подключение SQLAlchemy к БД с рыночными данными (используют загрузчики Airflow) |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` | Параметры PostgreSQL для dbt (`analytics/profiles.yml`) и для самого контейнера `market-postgres` |
+| `DB_HOST_PORT` | Порт, на который `market-postgres` публикуется на хост (по умолчанию `5433`) |
 | `MOEX_API_TOKEN` | Токен API Algopack MOEX |
-| `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` | Параметры PostgreSQL для dbt (`analytics/profiles.yml`) |
 
 Переменные из `.env` прокидываются в `docker-compose.yaml` и в профиль dbt.
 
-Для dbt создайте профиль из примера:
+Профиль dbt лежит в репозитории (`analytics/profiles.yml`) и не содержит секретов: все параметры подключения берутся из `DB_*` через `env_var()`.
 
-```bash
-cp analytics/profiles.yml.example analytics/profiles.yml
-```
-
-> Файлы `.env` и `analytics/profiles.yml` в `.gitignore` — не коммитьте секреты.
+> Файл `.env` в `.gitignore` — не коммитьте секреты.
 
 ### 2. Запуск инфраструктуры
 
@@ -120,6 +118,23 @@ docker compose run --rm dbt run
 docker compose run --rm dbt test
 ```
 
+## База с рыночными данными
+
+Сервис `market-postgres` создаёт схему `stock_market` и таблицы `prices_moex`, `prices_yfinance`, `instruments` скриптами из `infra/initdb` при **первой** инициализации тома.
+
+```bash
+# посмотреть, что создалось
+docker compose exec market-postgres psql -U market -d market -c '\dt stock_market.*'
+
+# применить bootstrap-скрипты к уже существующему тому (они не выполняются повторно автоматически)
+docker compose exec -T market-postgres psql -U market -d market -f - < infra/initdb/01_stock_market.sql
+```
+
+Подключение из IDE/psql с хоста: `localhost:5433`, база/пользователь/пароль — `market` (см. `.env`).
+Для Metabase внутри compose: хост `market-postgres`, порт `5432`, база `market`.
+
+> `docker compose down -v` удаляет тома `postgres-db-volume` и `market-db-volume`, то есть рыночные данные тоже.
+
 ## dbt
 
 Проект `analytics` объявляет источники в `models/sources.yaml`:
@@ -128,6 +143,9 @@ docker compose run --rm dbt test
 - `stock_market.prices_yfinance`
 - `stock_market.instruments`
 
+Слои моделей: `staging` (view) → `marts` (`fct_all_prices` приводит цены к рублям по курсу `RUB=X`).
+Профиль подключения — `analytics/profiles.yml` (параметры из переменных окружения `DB_*`).
+
 ## Зависимости Python (образ Airflow)
 
-Основные пакеты из `requirements.txt`: `pandas`, `sqlalchemy`, `psycopg2-binary`, `moexalgo`, `yfinance`, `python-dotenv`, провайдеры Airflow для PostgreSQL и Docker.
+Основные пакеты из `requirements.txt`: `pandas`, `sqlalchemy`, `psycopg2-binary`, `moexalgo`, `yfinance`, `python-dotenv`, `dbt-core` + `dbt-postgres`, провайдер Airflow для PostgreSQL. DAG оркестрации запускает dbt прямо в контейнере Airflow, поэтому `docker.sock` в контейнеры не пробрасывается.
