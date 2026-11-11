@@ -389,6 +389,11 @@ services:
     environment:
       - DBT_PROFILES_DIR=/app
       - DBT_TARGET=dev
+      - DB_HOST=${DB_HOST:-market-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-market}
+      - DB_PASS=${DB_PASS:-market}
+      - DB_NAME=${DB_NAME:-market}
     restart: on-failure
     depends_on:
       postgres:

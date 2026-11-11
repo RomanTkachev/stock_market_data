@@ -13,7 +13,6 @@ airflow_setup/unittests.db
 analytics/target/
 analytics/dbt_packages/
 analytics/logs/
-analytics/profiles.yml
 analytics/.user.yml
 
 # Configs with secrets

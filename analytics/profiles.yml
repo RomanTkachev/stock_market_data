@@ -1,0 +1,18 @@
+config:
+  send_anonymous_usage_stats: false
+
+# dbt подключается к БД с рыночными данными (сервис market-postgres в docker-compose).
+# Все параметры подключения берутся из переменных окружения, значения по умолчанию
+# совпадают с настройками docker-compose, поэтому профиль не содержит секретов.
+analytics:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST', 'market-postgres') }}"
+      port: "{{ env_var('DB_PORT', '5432') | int }}"
+      user: "{{ env_var('DB_USER', 'market') }}"
+      pass: "{{ env_var('DB_PASS', 'market') }}"
+      dbname: "{{ env_var('DB_NAME', 'market') }}"
+      schema: stock_market
+      threads: 4
