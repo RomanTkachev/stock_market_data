@@ -22,6 +22,7 @@ airflow_setup/webserver_config.py
 # SQL sessions (исключения: bootstrap-скрипты БД и dbt-модели должны попадать в репозиторий)
 *.sql
 !infra/initdb/*.sql
+!infra/migrations/*.sql
 !analytics/models/**/*.sql
 
 # Python cache

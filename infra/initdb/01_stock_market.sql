@@ -34,11 +34,12 @@ CREATE TABLE IF NOT EXISTS stock_market.prices_yfinance (
     price      NUMERIC(18, 6)
 );
 
--- Индексы под запросы загрузчиков: SELECT ticker, MAX(price_date) ... GROUP BY ticker
-CREATE INDEX IF NOT EXISTS ix_prices_moex_ticker_date
+-- Индексы под запросы загрузчиков + защита от дублей.
+-- UNIQUE обязателен для идемпотентной загрузки: INSERT ... ON CONFLICT (ticker, price_date).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_prices_moex_ticker_date
     ON stock_market.prices_moex (ticker, price_date);
 
-CREATE INDEX IF NOT EXISTS ix_prices_yfinance_ticker_date
+CREATE UNIQUE INDEX IF NOT EXISTS ux_prices_yfinance_ticker_date
     ON stock_market.prices_yfinance (ticker, price_date);
 
 -- Начальное наполнение справочника под текущие списки тикеров в DAG-ах.
