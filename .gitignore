@@ -23,6 +23,7 @@ airflow_setup/webserver_config.py
 *.sql
 !infra/initdb/*.sql
 !infra/migrations/*.sql
+!infra/metabase/cards/*.sql
 !analytics/models/**/*.sql
 
 # Python cache
