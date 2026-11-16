@@ -6,7 +6,7 @@
 
 - **Ежедневная загрузка котировок MOEX** (API Algopack / `moexalgo`) → схема `stock_market`, таблица `prices_moex`.
 - **Ежедневная загрузка данных Yahoo Finance**: акции, криптовалюты, фиатные валюты → таблица `prices_yfinance`.
-- **Инкрементальная загрузка**: в БД попадают только новые даты; пропуски по календарю (выходные) заполняются forward/back fill.
+- **Инкрементальная загрузка по logical_date**: каждый запуск грузит окно `[data_interval_start − LOADER_LOOKBACK_DAYS, data_interval_end)`, запись идемпотентна (`INSERT ... ON CONFLICT DO NOTHING`), поэтому повторные и параллельные запуски не создают дублей, а пропущенные дни догоняются через `catchup`.
 - **Оркестрация dbt**: отдельный DAG ждёт успешного завершения загрузчиков и запускает `dbt run` и `dbt test` (dbt установлен в образ Airflow).
 - **Локальный стек в Docker**: Airflow (CeleryExecutor), PostgreSQL с метаданными Airflow, PostgreSQL с рыночными данными (`market-postgres`), Redis, Metabase.
 
@@ -58,13 +58,44 @@
 | БД | PostgreSQL 16 (метаданные Airflow + `market-postgres` с рыночными данными) |
 | Контейнеризация | Docker Compose |
 
+## Структура репозитория
+
+```text
+airflow_setup/
+├── dags/
+│   ├── moex_dag/dag.py       # DAG загрузки MOEX
+│   ├── yfinance_dag/dag.py   # DAG загрузки Yahoo Finance
+│   └── dbt_dag/dag.py        # DAG-оркестратор dbt
+├── config/airflow.cfg
+└── logs/
+
+etl/                          # ETL-логика: импортируется DAG-ами и тестами
+├── config.py                 # тикеры, lookback, начало истории
+├── dates.py                  # окно загрузки, заполнение пропусков, дедупликация
+├── db.py                     # engine, последние даты, идемпотентный upsert
+├── yfinance_source.py        # загрузка Yahoo Finance
+├── moex_source.py            # загрузка MOEX
+└── pipelines.py              # сборка пайплайнов для DAG-ов
+
+tests/                        # pytest на чистые функции и сборку пайплайнов
+analytics/                    # dbt-проект
+infra/initdb/                 # bootstrap-скрипты схемы БД
+infra/migrations/             # миграции для уже существующих БД
+```
+
+DAG-файлы остаются тонкими: вся логика — в пакете `etl`, который монтируется в контейнеры
+(`/opt/python`) и доступен тестам без Airflow.
+
 ## DAG-и Airflow
 
 | DAG ID | Расписание | Описание |
 |--------|------------|----------|
-| `daily_moex_data_loader` | `0 8 * * *` (MSK) | Загрузка дневных свечей MOEX в `stock_market.prices_moex` |
-| `daily_nyse_data_loader` | `0 8 * * *` (MSK) | Загрузка котировок yfinance в `stock_market.prices_yfinance` |
+| `daily_moex_data_loader` | `0 8 * * *` (MSK) | `load_moex_prices`: окно по `logical_date` → `stock_market.prices_moex` |
+| `daily_nyse_data_loader` | `0 8 * * *` (MSK) | `load_yfinance_prices`: окно по `logical_date` → `stock_market.prices_yfinance` |
 | `run_dbt_after_sources` | `0 9 * * *` (MSK) | Ожидание обоих загрузчиков → `dbt run` → `dbt test` |
+
+У загрузчиков включены `catchup=True` (догоняем пропущенные дни), `max_active_runs=1`
+(нет параллельных запусков) и `retries=2` с задержкой 5 минут.
 
 ## Требования
 
@@ -89,6 +120,7 @@ cp .env.example .env
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` | Параметры PostgreSQL для dbt (`analytics/profiles.yml`) и для самого контейнера `market-postgres` |
 | `DB_HOST_PORT` | Порт, на который `market-postgres` публикуется на хост (по умолчанию `5433`) |
 | `MOEX_API_TOKEN` | Токен API Algopack MOEX |
+| `LOADER_LOOKBACK_DAYS` | На сколько дней назад расширять окно загрузки (по умолчанию `3`) |
 
 Переменные из `.env` прокидываются в `docker-compose.yaml` и в профиль dbt.
 
@@ -130,12 +162,37 @@ docker compose exec market-postgres psql -U market -d market -c '\dt stock_marke
 
 # применить bootstrap-скрипты к уже существующему тому (они не выполняются повторно автоматически)
 docker compose exec -T market-postgres psql -U market -d market -f - < infra/initdb/01_stock_market.sql
+
+# миграции для существующих БД (уникальные индексы, нужны для идемпотентной записи)
+docker compose exec -T market-postgres psql -U market -d market -f - < infra/migrations/001_unique_prices.sql
 ```
 
 Подключение из IDE/psql с хоста: `localhost:5433`, база/пользователь/пароль — `market` (см. `.env`).
 Для Metabase внутри compose: хост `market-postgres`, порт `5432`, база `market`.
 
 > `docker compose down -v` удаляет тома `postgres-db-volume` и `market-db-volume`, то есть рыночные данные тоже.
+
+## Инкрементальная загрузка
+
+Каждый запуск загрузчика привязан к `logical_date` (точнее — к `data_interval`) и грузит окно
+`[data_interval_start − LOADER_LOOKBACK_DAYS, data_interval_end)`:
+
+- `data_interval_end` — эксклюзивная граница, поэтому незакрытая свеча текущего дня в БД не попадает;
+- `LOADER_LOOKBACK_DAYS` (по умолчанию 3 дня) — страховка от того, что источник отдаёт последние свечи с задержкой;
+- пустая таблица → bootstrap: грузится история с `HISTORY_START_DATE` (2020-01-01);
+- запись идемпотентна: `INSERT ... ON CONFLICT (ticker, price_date) DO NOTHING` — повторный запуск за ту же дату вставляет 0 строк;
+- `catchup=True` + `max_active_runs=1`: пропущенные интервалы догоняются, параллельных запусков нет.
+
+Backfill за прошлый период:
+
+```bash
+docker compose exec airflow-scheduler airflow dags backfill daily_nyse_data_loader \
+  --start-date 2026-11-01 --end-date 2026-11-03
+```
+
+> При первом включении DAG-а Airflow поставит в очередь все интервалы с `start_date` (2025-10-22).
+> Это безопасно (upsert), но занимает время; если история не нужна — сдвиньте `start_date`.
+
 
 ## dbt
 
@@ -147,6 +204,15 @@ docker compose exec -T market-postgres psql -U market -d market -f - < infra/ini
 
 Слои моделей: `staging` (view) → `marts` (`fct_all_prices` приводит цены к рублям по курсу `RUB=X`).
 Профиль подключения — `analytics/profiles.yml` (параметры из переменных окружения `DB_*`).
+
+## Тесты
+
+Логика загрузчиков покрыта тестами на чистых функциях (без БД и внешних API):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
 
 ## Зависимости Python (образ Airflow)
 
