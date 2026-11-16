@@ -19,87 +19,141 @@ class FakeEngine:
         raise AssertionError("БД в тестах не используется")
 
 
-def _stub_fetch(monkeypatch, module, window_calls, rows: int = 1):
+def _prices_frame(rows: int = 1) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "price_date": pd.to_datetime(["2026-11-09"] * rows),
+            "ticker": ["AAPL"] * rows,
+            "open": [1.0] * rows,
+            "high": [2.0] * rows,
+            "low": [0.5] * rows,
+            "close": [1.5] * rows,
+            "adj_close": [1.4] * rows,
+            "volume": [100] * rows,
+        }
+    )
+
+
+def _stub_prices_fetch(monkeypatch, windows):
     def fake_fetch(tickers, start, end):
-        window_calls.append((start, end))
-        return pd.DataFrame(
-            {
-                "price_date": pd.to_datetime(["2026-11-09"] * rows),
-                "ticker": ["AAPL"] * rows,
-                "price": [1.0] * rows,
-            }
-        )
+        windows.append((start, end))
+        return _prices_frame()
 
-    monkeypatch.setattr(module, "fetch_daily_prices", fake_fetch)
+    monkeypatch.setattr(pipelines.yfinance_source, "fetch_daily_prices", fake_fetch)
 
 
-def _stub_upsert(monkeypatch, stored):
-    def fake_upsert(engine, table_name, df, **kwargs):
-        stored.append((table_name, len(df)))
+def _stub_upsert(monkeypatch, stored_rows: list[int], function_name: str = "upsert_prices"):
+    def fake_upsert(engine, df, **kwargs):
+        stored_rows.append(len(df))
         return len(df)
 
-    monkeypatch.setattr(pipelines.db, "upsert_prices", fake_upsert)
+    monkeypatch.setattr(pipelines.db, function_name, fake_upsert)
 
 
-def test_load_yfinance_interval_bootstraps_history_for_empty_table(monkeypatch):
+def test_load_prices_interval_bootstraps_history_for_empty_table(monkeypatch):
     windows, stored = [], []
     monkeypatch.setattr(pipelines.db, "has_history", lambda *args, **kwargs: False)
-    _stub_fetch(monkeypatch, pipelines.yfinance_source, windows)
+    _stub_prices_fetch(monkeypatch, windows)
     _stub_upsert(monkeypatch, stored)
 
-    stats = pipelines.load_yfinance_interval(
+    stats = pipelines.load_prices_interval(
         INTERVAL_START, INTERVAL_END, tickers=("AAPL",), engine=FakeEngine()
     )
 
     assert windows == [(pipelines.HISTORY_START_DATE, date(2026, 11, 10))]
-    assert stats["inserted_rows"] == 1
+    assert stats["written_rows"] == 1
     assert stats["fetched_rows"] == 1
-    assert stats["table"] == "prices_yfinance"
+    assert stats["source"] == "prices"
 
 
-def test_load_yfinance_interval_uses_lookback_when_history_exists(monkeypatch):
+def test_load_prices_interval_uses_lookback_when_history_exists(monkeypatch):
     windows, stored = [], []
     monkeypatch.setattr(pipelines.db, "has_history", lambda *args, **kwargs: True)
-    _stub_fetch(monkeypatch, pipelines.yfinance_source, windows)
+    _stub_prices_fetch(monkeypatch, windows)
     _stub_upsert(monkeypatch, stored)
 
-    pipelines.load_yfinance_interval(
+    pipelines.load_prices_interval(
         INTERVAL_START, INTERVAL_END, tickers=("AAPL",), lookback_days=3, engine=FakeEngine()
     )
 
     assert windows == [(date(2026, 11, 6), date(2026, 11, 10))]
 
 
-def test_load_moex_interval_uses_inclusive_end(monkeypatch):
-    windows, stored = [], []
-    monkeypatch.setattr(pipelines.db, "has_history", lambda *args, **kwargs: True)
-    monkeypatch.setattr(pipelines.moex_source, "configure_token", lambda *args, **kwargs: None)
-    _stub_fetch(monkeypatch, pipelines.moex_source, windows)
-    _stub_upsert(monkeypatch, stored)
-
-    stats = pipelines.load_moex_interval(
-        INTERVAL_START, INTERVAL_END, tickers=("SBER",), lookback_days=3, engine=FakeEngine()
-    )
-
-    # окно [6 Nov, 10 Nov), но moexalgo ждёт включительную верхнюю границу
-    assert windows == [(date(2026, 11, 6), date(2026, 11, 9))]
-    assert stats["table"] == "prices_moex"
-    assert stats["source"] == "moex"
-
-
-def test_load_interval_reports_empty_window(monkeypatch):
-    stored = []
+def test_load_prices_interval_reports_empty_window(monkeypatch):
     monkeypatch.setattr(pipelines.db, "has_history", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         pipelines.yfinance_source,
         "fetch_daily_prices",
         lambda tickers, start, end: empty_prices_frame(),
     )
-    _stub_upsert(monkeypatch, stored)
+    _stub_upsert(monkeypatch, [])
 
-    stats = pipelines.load_yfinance_interval(
+    stats = pipelines.load_prices_interval(
         INTERVAL_START, INTERVAL_END, tickers=("AAPL",), engine=FakeEngine()
     )
 
     assert stats["fetched_rows"] == 0
-    assert stats["inserted_rows"] == 0
+    assert stats["written_rows"] == 0
+
+
+def test_load_actions_interval_bootstraps_history(monkeypatch):
+    windows = []
+    monkeypatch.setattr(pipelines.db, "count_rows", lambda *args, **kwargs: 0)
+
+    def fake_fetch(tickers, start, end):
+        windows.append((start, end))
+        dividends = pd.DataFrame(
+            [{"ticker": "AAPL", "ex_date": date(2026, 11, 5), "amount": 1.5}]
+        )
+        splits = pd.DataFrame(columns=["ticker", "split_date", "ratio"])
+        return dividends, splits
+
+    monkeypatch.setattr(pipelines.yfinance_source, "fetch_actions", fake_fetch)
+    monkeypatch.setattr(pipelines.db, "upsert_dividends", lambda engine, df, **kw: len(df))
+    monkeypatch.setattr(pipelines.db, "upsert_splits", lambda engine, df, **kw: len(df))
+
+    stats = pipelines.load_actions_interval(
+        INTERVAL_START, INTERVAL_END, tickers=("AAPL",), engine=FakeEngine()
+    )
+
+    assert windows == [(pipelines.HISTORY_START_DATE, date(2026, 11, 10))]
+    assert stats["dividends_written"] == 1
+    assert stats["splits_written"] == 0
+    assert stats["source"] == "actions"
+
+
+def test_load_actions_interval_uses_window_when_actions_exist(monkeypatch):
+    windows = []
+    monkeypatch.setattr(pipelines.db, "count_rows", lambda *args, **kwargs: 5)
+    monkeypatch.setattr(
+        pipelines.yfinance_source,
+        "fetch_actions",
+        lambda tickers, start, end: (
+            windows.append((start, end)),
+            (pd.DataFrame(columns=["ticker", "ex_date", "amount"]),
+             pd.DataFrame(columns=["ticker", "split_date", "ratio"])),
+        )[1],
+    )
+    monkeypatch.setattr(pipelines.db, "upsert_dividends", lambda engine, df, **kw: 0)
+    monkeypatch.setattr(pipelines.db, "upsert_splits", lambda engine, df, **kw: 0)
+
+    pipelines.load_actions_interval(
+        INTERVAL_START, INTERVAL_END, tickers=("AAPL",), lookback_days=3, engine=FakeEngine()
+    )
+
+    assert windows == [(date(2026, 11, 6), date(2026, 11, 10))]
+
+
+def test_load_instruments_upserts_metadata(monkeypatch):
+    monkeypatch.setattr(
+        pipelines.yfinance_source,
+        "fetch_instruments_meta",
+        lambda universe: [{"ticker": "AAPL", "instrument_type": "stock"}],
+    )
+    stored = []
+    monkeypatch.setattr(pipelines.db, "upsert_instruments", lambda engine, rows, **kw: stored.append(rows) or len(rows))
+
+    stats = pipelines.load_instruments(universe={"stock": ("AAPL",)}, engine=FakeEngine())
+
+    assert stats == {"source": "instruments", "tickers": 1, "written": 1}
+    assert stored[0][0]["ticker"] == "AAPL"

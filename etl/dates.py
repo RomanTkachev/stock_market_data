@@ -6,7 +6,8 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-PRICE_COLUMNS = ("price_date", "ticker", "price")
+PRICE_COLUMNS = ("price_date", "ticker", "open", "high", "low", "close", "adj_close", "volume")
+PRICE_VALUE_COLUMNS = ("open", "high", "low", "close", "adj_close", "volume")
 
 
 def empty_prices_frame() -> pd.DataFrame:
@@ -56,11 +57,13 @@ def fill_missing_dates(
     df: pd.DataFrame,
     date_col: str = "price_date",
     ticker_col: str = "ticker",
-    value_col: str = "price",
+    value_cols: tuple[str, ...] = PRICE_VALUE_COLUMNS,
 ) -> pd.DataFrame:
     """Заполняет пропущенные календарные дни для каждого тикера.
 
-    Внутри диапазона min..max по тикеру пропуски закрываются forward/back fill.
+    Внутри диапазона min..max по тикеру пропуски закрываются forward/back fill,
+    чтобы в БД был непрерывный календарь (нужно для конверсии валют и джойнов по дате).
+    Объём торгов на неторговых днях обнуляется: переносить его нельзя.
     Пустые календарные дни за границами диапазона не добавляются.
     """
     if df.empty:
@@ -68,16 +71,20 @@ def fill_missing_dates(
 
     frame = df.copy()
     frame[date_col] = pd.to_datetime(frame[date_col])
+    columns = [column for column in value_cols if column in frame.columns]
 
     filled_frames = []
     for ticker_name, group in frame.groupby(ticker_col):
-        series = group.set_index(date_col)[[value_col]].sort_index()
+        series = group.set_index(date_col)[columns].sort_index()
         min_date, max_date = series.index.min(), series.index.max()
         if pd.isna(min_date) or pd.isna(max_date):
             continue
 
         full_range = pd.date_range(start=min_date, end=max_date, freq="D", name=date_col)
         filled = series.reindex(full_range).ffill().bfill()
+        if "volume" in filled.columns:
+            is_trading_day = filled.index.isin(series.index)
+            filled["volume"] = filled["volume"].where(is_trading_day, 0)
         filled[ticker_col] = ticker_name
         filled_frames.append(filled)
 
@@ -85,7 +92,7 @@ def fill_missing_dates(
         return empty_prices_frame()
 
     result = pd.concat(filled_frames).reset_index()
-    return result[[date_col, ticker_col, value_col]].reset_index(drop=True)
+    return result[[date_col, ticker_col, *columns]].reset_index(drop=True)
 
 
 def dedupe_prices(

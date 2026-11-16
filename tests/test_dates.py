@@ -3,7 +3,13 @@ from datetime import date, datetime
 import pandas as pd
 import pytest
 
-from etl.dates import build_load_window, dedupe_prices, fill_missing_dates, resolve_load_window
+from etl.dates import (
+    PRICE_COLUMNS,
+    build_load_window,
+    dedupe_prices,
+    fill_missing_dates,
+    resolve_load_window,
+)
 
 INTERVAL_START = datetime(2026, 11, 9, 8, 0)
 INTERVAL_END = datetime(2026, 11, 10, 8, 0)
@@ -60,20 +66,23 @@ def test_resolve_load_window_uses_interval_when_history_exists():
     assert window == (date(2026, 11, 6), date(2026, 11, 10))
 
 
-def test_fill_missing_dates_fills_weekend_with_previous_price():
+def test_fill_missing_dates_fills_prices_and_zeroes_volume():
     df = pd.DataFrame(
         {
             "price_date": [date(2026, 11, 6), date(2026, 11, 9)],
             "ticker": ["AAPL", "AAPL"],
-            "price": [100.0, 110.0],
+            "close": [100.0, 110.0],
+            "volume": [1_000, 2_000],
         }
     )
 
     filled = fill_missing_dates(df)
 
-    assert list(filled.columns) == ["price_date", "ticker", "price"]
+    assert list(filled.columns) == ["price_date", "ticker", "close", "volume"]
     assert len(filled) == 4  # пт, сб, вс, пн
-    assert list(filled["price"]) == [100.0, 100.0, 100.0, 110.0]
+    assert list(filled["close"]) == [100.0, 100.0, 100.0, 110.0]
+    # в выходные торги не идут — объём не переносим
+    assert list(filled["volume"]) == [1_000, 0, 0, 2_000]
     assert set(filled["ticker"]) == {"AAPL"}
 
 
@@ -87,7 +96,8 @@ def test_fill_missing_dates_processes_tickers_independently():
                 date(2026, 11, 6),
             ],
             "ticker": ["AAPL", "AAPL", "MSFT", "MSFT"],
-            "price": [1.0, 2.0, 10.0, 20.0],
+            "close": [1.0, 2.0, 10.0, 20.0],
+            "volume": [10, 20, 100, 200],
         }
     )
 
@@ -96,10 +106,11 @@ def test_fill_missing_dates_processes_tickers_independently():
     assert filled.groupby("ticker").size().to_dict() == {"AAPL": 2, "MSFT": 5}
 
 
-def test_fill_missing_dates_returns_empty_frame_for_empty_input():
+def test_fill_missing_dates_returns_empty_frame_with_all_columns():
     filled = fill_missing_dates(pd.DataFrame())
+
     assert filled.empty
-    assert list(filled.columns) == ["price_date", "ticker", "price"]
+    assert list(filled.columns) == list(PRICE_COLUMNS)
 
 
 def test_dedupe_prices_keeps_last_row_per_ticker_and_date():
@@ -107,11 +118,12 @@ def test_dedupe_prices_keeps_last_row_per_ticker_and_date():
         {
             "price_date": [pd.Timestamp("2026-11-09"), pd.Timestamp("2026-11-09")],
             "ticker": ["AAPL", "AAPL"],
-            "price": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [10, 20],
         }
     )
 
     deduped = dedupe_prices(df)
 
     assert len(deduped) == 1
-    assert deduped.iloc[0]["price"] == 2.0
+    assert deduped.iloc[0]["close"] == 2.0
