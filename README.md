@@ -183,12 +183,17 @@ docker compose exec -T market-postgres psql -U market -d market -f - < infra/mig
 - запись идемпотентна: `INSERT ... ON CONFLICT (ticker, price_date) DO NOTHING` — повторный запуск за ту же дату вставляет 0 строк;
 - `catchup=True` + `max_active_runs=1`: пропущенные интервалы догоняются, параллельных запусков нет.
 
-Backfill за прошлый период:
+Backfill за прошлый период (Airflow 3: команда `backfill create`, а не `dags backfill`):
 
 ```bash
-docker compose exec airflow-scheduler airflow dags backfill daily_nyse_data_loader \
-  --start-date 2026-11-01 --end-date 2026-11-03
+docker compose run --rm airflow-cli airflow backfill create \
+  --dag-id daily_nyse_data_loader \
+  --from-date 2026-11-01 --to-date 2026-11-03
 ```
+
+> CLI Airflow запускайте через сервис `airflow-cli` (`docker compose run --rm airflow-cli airflow ...`).
+> `docker compose exec <service> airflow ...` под root не работает: пакеты Airflow лежат в user-site,
+> а `PYTHONPATH` выставляет только `/entrypoint`.
 
 > При первом включении DAG-а Airflow поставит в очередь все интервалы с `start_date` (2025-10-22).
 > Это безопасно (upsert), но занимает время; если история не нужна — сдвиньте `start_date`.
