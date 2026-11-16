@@ -6,3 +6,7 @@ RUN pip install --no-cache-dir --user -r /requirements.txt
 # проверяем, что команда доступна (иначе сборка упадёт сразу)
 RUN dbt --version
 
+# Пакет с ETL-логикой, который импортируют DAG-и
+COPY etl /opt/python/etl
+ENV PYTHONPATH="/opt/python"
+
