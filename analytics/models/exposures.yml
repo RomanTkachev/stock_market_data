@@ -14,6 +14,7 @@ exposures:
       - ref('fct_prices_daily')
       - ref('fct_market_overview')
       - ref('fct_dividends')
+      - ref('fct_splits')
       - ref('fct_volume_leaders')
       - ref('dim_instruments')
     owner:

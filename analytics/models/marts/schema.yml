@@ -44,3 +44,17 @@ models:
         tests: [not_null]
       - name: instrument_type
         tests: [not_null]
+
+  - name: fct_splits
+    description: Сплиты с ценой на дату сплита
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_instruments')
+              field: ticker
+      - name: split_date
+        tests: [not_null]
+      - name: ratio
+        tests: [not_null]
