@@ -6,9 +6,8 @@ from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
 
-# Имена DAG-ов-источников
-SOURCE_DAG_MOEX = "daily_moex_data_loader"
-SOURCE_DAG_YFINANCE = "daily_nyse_data_loader"
+# Имя DAG-а-источника
+SOURCE_DAG_PRICES = "daily_prices_loader"
 
 # dbt-postgres ставится в образ Airflow (см. requirements.txt), а проект analytics
 # примонтирован томом в /opt/airflow/analytics, поэтому отдельный контейнер не нужен
@@ -38,9 +37,7 @@ with DAG(
     ### DAG: Запуск dbt после загрузки данных
 
     Этот DAG:
-    1. Ждёт успешного завершения:
-       - `daily_moex_data_loader`
-       - `daily_nyse_data_loader`
+    1. Ждёт успешного завершения `daily_prices_loader`.
     2. Запускает `dbt run` и `dbt test` в контейнере Airflow (dbt установлен в образ).
 
     Зависимости:
@@ -49,25 +46,11 @@ with DAG(
     """,
 ) as dag:
 
-    # --- Ждём завершения MOEX DAG ---
-    wait_for_moex = ExternalTaskSensor(
-        task_id="wait_for_moex_dag",
-        external_dag_id=SOURCE_DAG_MOEX,
+    # --- Ждём завершения DAG-а загрузки цен ---
+    wait_for_prices = ExternalTaskSensor(
+        task_id="wait_for_prices_dag",
+        external_dag_id=SOURCE_DAG_PRICES,
         external_task_id=None,  # Ждём весь DAG
-        allowed_states=["success"],
-        failed_states=["failed"],
-        mode="poke",
-        poke_interval=pendulum.duration(seconds=30),
-        timeout=pendulum.duration(hours=1),
-        execution_date_fn=lambda dt: dt.in_timezone("Europe/Moscow").subtract(days=1).replace(hour=8, minute=0, second=0, microsecond=0),
-        soft_fail=False,
-    )
-
-    # --- Ждём завершения yfinance DAG ---
-    wait_for_yfinance = ExternalTaskSensor(
-        task_id="wait_for_yfinance_dag",
-        external_dag_id=SOURCE_DAG_YFINANCE,
-        external_task_id=None,
         allowed_states=["success"],
         failed_states=["failed"],
         mode="poke",
@@ -91,4 +74,4 @@ with DAG(
     )
 
     # Порядок выполнения
-    [wait_for_moex, wait_for_yfinance] >> dbt_run >> dbt_test
+    wait_for_prices >> dbt_run >> dbt_test
