@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: Дневные свечи OHLCV по всем инструментам
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: price_date
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+
+  - name: stg_instruments
+    description: Справочник инструментов с классом актива
+    columns:
+      - name: ticker
+        tests: [unique, not_null]
+      - name: instrument_type
+        tests:
+          - accepted_values:
+              values: ['stock', 'etf', 'crypto', 'fx', 'index', 'commodity']
+
+  - name: stg_dividends
+    description: Дивиденды по датам отсечки
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: ex_date
+        tests: [not_null]
+      - name: amount
+        tests: [not_null]
+
+  - name: stg_splits
+    description: Дробление/консолидация акций
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: split_date
+        tests: [not_null]

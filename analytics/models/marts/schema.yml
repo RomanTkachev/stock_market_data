@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: dim_instruments
+    description: Справочник инструментов для срезания фактов
+    columns:
+      - name: ticker
+        tests: [unique, not_null]
+
+  - name: fct_prices_daily
+    description: Дневной факт по инструментам (OHLCV, цены в рублях, доходности, скользящие средние)
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_instruments')
+              field: ticker
+      - name: price_date
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+      - name: instrument_type
+        tests:
+          - accepted_values:
+              values: ['stock', 'etf', 'crypto', 'fx', 'index', 'commodity']
+
+  - name: fct_dividends
+    description: Дивиденды с доходностью на дату отсечки
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_instruments')
+              field: ticker
+      - name: ex_date
+        tests: [not_null]
+
+  - name: fct_market_overview
+    description: Рыночная картина дня по классам активов
+    columns:
+      - name: price_date
+        tests: [not_null]
+      - name: instrument_type
+        tests: [not_null]
