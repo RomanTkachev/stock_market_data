@@ -30,11 +30,13 @@ def fetch_daily_prices(tickers: Iterable[str], start: date, end: date) -> pd.Dat
         return empty_prices_frame()
 
     frames = []
+    errors = []
     for symbol in ticker_list:
         try:
             candles = Ticker(symbol).candles(start=start, end=end, period="1d")
         except Exception as exc:  # noqa: BLE001 - ошибка по одному тикеру не должна валить весь запуск
             logger.error("Не удалось загрузить данные MOEX по %s: %s", symbol, exc)
+            errors.append(f"{symbol}: {exc}")
             continue
 
         if candles is None or candles.empty:
@@ -44,11 +46,16 @@ def fetch_daily_prices(tickers: Iterable[str], start: date, end: date) -> pd.Dat
         frame = candles.reset_index().rename(columns={"begin": "price_date", "close": "price"})
         if "price_date" not in frame.columns or "price" not in frame.columns:
             logger.error("Неожиданный формат свечей MOEX по %s: %s", symbol, list(frame.columns))
+            errors.append(f"{symbol}: неожиданный формат свечей")
             continue
 
         frame = frame.assign(price_date=pd.to_datetime(frame["price_date"]), ticker=symbol)
         frames.append(frame[["price_date", "ticker", "price"]].dropna(subset=["price"]))
 
     if not frames:
+        if errors:
+            # Все тикеры упали с ошибкой: это сбой источника, а не «нет торгов».
+            # Иначе DAG был бы зелёным, а данных в БД не появилось.
+            raise RuntimeError("MOEX не вернул данные ни по одному тикеру: " + "; ".join(errors))
         return empty_prices_frame()
     return pd.concat(frames, ignore_index=True)
