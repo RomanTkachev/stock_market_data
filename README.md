@@ -134,7 +134,8 @@ docker compose up --build
 После старта:
 
 - **Airflow UI**: http://localhost:8080 (логин/пароль по умолчанию: `airflow` / `airflow`)
-- **Metabase**: http://localhost:3000
+- **Metabase**: http://localhost:3000 — администратор `admin@example.com` / `Metabase!2026`
+  (создаётся скриптом `infra/metabase/setup_dashboards.py`, см. раздел «Дашборды в Metabase»)
 
 ### 3. Включение DAG-ов
 
@@ -221,6 +222,35 @@ docker compose run --rm airflow-cli airflow backfill create \
 и `tests/assert_prices_valid_ohlc.sql` — всего 25 проверок.
 
 Профиль подключения — `analytics/profiles.yml` (параметры из переменных окружения `DB_*`).
+
+## Дашборды в Metabase
+
+Дашборд «Финансовые рынки» разворачивается кодом — карточки описаны SQL-файлами в
+`infra/metabase/cards/`, а скрипт `infra/metabase/setup_dashboards.py` создаёт подключение к БД,
+карточки и дашборд через API Metabase:
+
+```bash
+python3 infra/metabase/setup_dashboards.py
+```
+
+Скрипт идемпотентен: повторный запуск обновляет карточки и раскладку дашборда, дублей не создаёт.
+Меняется только SQL в `infra/metabase/cards/*.sql` — после правки достаточно запустить скрипт ещё раз.
+
+| Переменная | Назначение |
+|------------|------------|
+| `METABASE_URL` | адрес Metabase (по умолчанию `http://localhost:3000`) |
+| `MB_ADMIN_EMAIL` / `MB_ADMIN_PASSWORD` | администратор Metabase (по умолчанию `admin@example.com` / `Metabase!2026`) |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS` | подключение к `market-postgres` (Metabase ходит к БД изнутри compose-сети) |
+
+> При первом запуске скрипт сам выполняет первичную настройку Metabase (создаёт администратора).
+> Если инстанс уже настроен другим администратором — задайте `MB_ADMIN_EMAIL` / `MB_ADMIN_PASSWORD`.
+
+Карточки дашборда: средняя доходность по классам активов, ширина рынка (advancers/decliners),
+динамика цен (нормировано к 100), цены в рублях по каждому инструменту, курс USD/RUB,
+волатильность 30 дней, лидеры по объёму, последние дивиденды с доходностью.
+
+Зависимость дашборда от моделей dbt зафиксирована как exposure
+`analytics/models/exposures.yml` — она видна в lineage `dbt docs`.
 
 ## Тесты
 

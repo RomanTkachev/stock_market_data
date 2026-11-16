@@ -1,0 +1,21 @@
+version: 2
+
+exposures:
+  - name: metabase_market_dashboard
+    label: "Metabase: Финансовые рынки"
+    type: dashboard
+    maturity: high
+    url: http://localhost:3000/dashboard/2
+    description: >
+      Дашборд по витринам dbt: доходность и ширина рынка по классам активов,
+      динамика цен в рублях, волатильность, объёмы торгов, дивиденды.
+      Разворачивается скриптом infra/metabase/setup_dashboards.py.
+    depends_on:
+      - ref('fct_prices_daily')
+      - ref('fct_market_overview')
+      - ref('fct_dividends')
+      - ref('fct_volume_leaders')
+      - ref('dim_instruments')
+    owner:
+      name: Finance Project
+      email: admin@example.com
