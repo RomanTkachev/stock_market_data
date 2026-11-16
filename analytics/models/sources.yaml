@@ -1,9 +1,15 @@
 version: 2
 
 sources:
-  - name: stock_market_raw 
-    schema: stock_market 
+  - name: stock_market_raw
+    description: Сырые данные, которые загружают DAG-и Airflow (пакет etl)
+    schema: stock_market
     tables:
-      - name: prices_yfinance
-      - name: prices_moex
+      - name: prices
+        description: Дневные свечи OHLCV (Yahoo Finance)
       - name: instruments
+        description: Справочник инструментов (метаданные из Yahoo Finance)
+      - name: dividends
+        description: Дивиденды по датам отсечки
+      - name: splits
+        description: Дробление/консолидация акций

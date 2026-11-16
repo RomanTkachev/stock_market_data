@@ -1,10 +1,12 @@
 {{ config(materialized='view') }}
 
-SELECT
-    instrument_id,
+select
     ticker,
     name,
     instrument_type,
-    currency,
-    is_russian
-FROM {{ source('stock_market_raw', 'instruments') }}
+    lower(currency) as currency,
+    exchange,
+    sector,
+    industry,
+    market_cap
+from {{ source('stock_market_raw', 'instruments') }}

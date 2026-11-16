@@ -10,14 +10,23 @@ import os
 from datetime import date
 
 SCHEMA = "stock_market"
-PRICES_MOEX_TABLE = "prices_moex"
-PRICES_YFINANCE_TABLE = "prices_yfinance"
+PRICES_TABLE = "prices"
+DIVIDENDS_TABLE = "dividends"
+SPLITS_TABLE = "splits"
 INSTRUMENTS_TABLE = "instruments"
 
-# Списки тикеров. Когда появится потребность менять их без деплоя —
-# вынести в Airflow Variable или в таблицу stock_market.instruments.
-MOEX_TICKERS: tuple[str, ...] = ("SBER", "GAZP", "LKOH", "YDEX", "T")
-YFINANCE_TICKERS: tuple[str, ...] = ("AAPL", "MSFT", "INTC", "BTC-USD", "ETH-USD", "RUB=X")
+# Инвестиционная вселенная: класс актива → тикеры Yahoo Finance.
+# Используется и загрузчиком цен, и для заполнения справочника instruments.
+UNIVERSE: dict[str, tuple[str, ...]] = {
+    "stock": ("AAPL", "MSFT", "INTC", "NVDA", "GOOGL", "AMZN", "TSLA"),
+    "etf": ("SPY", "QQQ"),
+    "crypto": ("BTC-USD", "ETH-USD", "SOL-USD"),
+    "fx": ("RUB=X", "EURUSD=X"),
+    "index": ("^GSPC", "^IXIC", "^VIX"),
+    "commodity": ("GC=F", "CL=F"),
+}
+
+TICKERS: tuple[str, ...] = tuple(ticker for symbols in UNIVERSE.values() for ticker in symbols)
 
 # Начало истории. Используется однократно (bootstrap): когда в таблице ещё нет
 # данных, грузим всю историю, иначе — только окно текущего запуска по logical_date.
@@ -26,3 +35,4 @@ HISTORY_START_DATE = date(2020, 1, 1)
 # На сколько дней назад расширять окно плановой загрузки: страховка от того,
 # что источник отдаёт последние свечи с задержкой.
 DEFAULT_LOOKBACK_DAYS = int(os.getenv("LOADER_LOOKBACK_DAYS", "3"))
+

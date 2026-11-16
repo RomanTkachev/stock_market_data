@@ -6,111 +6,124 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Iterable
 
-import pandas as pd
 from sqlalchemy.engine import Engine
 
-from etl import db, moex_source, yfinance_source
-from etl.config import (
-    DEFAULT_LOOKBACK_DAYS,
-    HISTORY_START_DATE,
-    MOEX_TICKERS,
-    PRICES_MOEX_TABLE,
-    PRICES_YFINANCE_TABLE,
-    YFINANCE_TICKERS,
-)
+from etl import db, yfinance_source
+from etl.config import DEFAULT_LOOKBACK_DAYS, HISTORY_START_DATE, TICKERS, UNIVERSE
 from etl.dates import dedupe_prices, fill_missing_dates, resolve_load_window
 
 logger = logging.getLogger(__name__)
 
 
-def load_yfinance_interval(
+def load_prices_interval(
     interval_start: datetime,
     interval_end: datetime,
     *,
-    tickers: Iterable[str] = YFINANCE_TICKERS,
+    tickers: Iterable[str] = TICKERS,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     engine: Engine | None = None,
 ) -> dict:
-    """Загружает цены Yahoo Finance за окно запуска DAG-а."""
+    """Загружает OHLCV-цены за окно запуска DAG-а."""
     engine = engine or db.get_engine()
-    window_start, window_end = _resolve_window(
-        engine, PRICES_YFINANCE_TABLE, tickers, interval_start, interval_end, lookback_days
-    )
-    raw = yfinance_source.fetch_daily_prices(tickers, window_start, window_end)
-    return _store(engine, PRICES_YFINANCE_TABLE, raw, window_start, window_end, source="yfinance")
-
-
-def load_moex_interval(
-    interval_start: datetime,
-    interval_end: datetime,
-    *,
-    tickers: Iterable[str] = MOEX_TICKERS,
-    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    engine: Engine | None = None,
-) -> dict:
-    """Загружает дневные свечи MOEX за окно запуска DAG-а."""
-    engine = engine or db.get_engine()
-    moex_source.configure_token()
-    window_start, window_end = _resolve_window(
-        engine, PRICES_MOEX_TABLE, tickers, interval_start, interval_end, lookback_days
-    )
-    # У moexalgo верхняя граница включительная, у окна — эксклюзивная
-    end_inclusive = window_end - timedelta(days=1)
-    raw = moex_source.fetch_daily_prices(tickers, window_start, end_inclusive)
-    return _store(engine, PRICES_MOEX_TABLE, raw, window_start, window_end, source="moex")
-
-
-def _resolve_window(
-    engine: Engine,
-    table_name: str,
-    tickers: Iterable[str],
-    interval_start: datetime,
-    interval_end: datetime,
-    lookback_days: int,
-) -> tuple:
-    return resolve_load_window(
-        has_history=db.has_history(engine, table_name, tickers),
+    window_start, window_end = resolve_load_window(
+        has_history=db.has_history(engine, tickers),
         interval_start=interval_start,
         interval_end=interval_end,
         lookback_days=lookback_days,
         history_start=HISTORY_START_DATE,
     )
 
+    raw = yfinance_source.fetch_daily_prices(tickers, window_start, window_end)
+    prices = dedupe_prices(fill_missing_dates(raw))
+    written = db.upsert_prices(engine, prices)
 
-def _store(
-    engine: Engine,
-    table_name: str,
-    raw: pd.DataFrame,
-    window_start,
-    window_end,
+    return _stats(
+        source="prices",
+        window_start=window_start,
+        window_end=window_end,
+        fetched=len(raw),
+        prepared=len(prices),
+        written=written,
+    )
+
+
+def load_actions_interval(
+    interval_start: datetime,
+    interval_end: datetime,
+    *,
+    tickers: Iterable[str] = TICKERS,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    engine: Engine | None = None,
+) -> dict:
+    """Загружает дивиденды и сплиты за окно запуска DAG-а."""
+    engine = engine or db.get_engine()
+    has_actions = bool(db.count_rows(engine, db.DIVIDENDS) + db.count_rows(engine, db.SPLITS))
+    window_start, window_end = resolve_load_window(
+        has_history=has_actions,
+        interval_start=interval_start,
+        interval_end=interval_end,
+        lookback_days=lookback_days,
+        history_start=HISTORY_START_DATE,
+    )
+
+    dividends, splits = yfinance_source.fetch_actions(tickers, window_start, window_end)
+    dividends_written = db.upsert_dividends(engine, dividends)
+    splits_written = db.upsert_splits(engine, splits)
+
+    stats = _stats(
+        source="actions",
+        window_start=window_start,
+        window_end=window_end,
+        fetched=len(dividends) + len(splits),
+        prepared=len(dividends) + len(splits),
+        written=dividends_written + splits_written,
+    )
+    stats["dividends_written"] = dividends_written
+    stats["splits_written"] = splits_written
+    return stats
+
+
+def load_instruments(
+    *,
+    universe: dict[str, tuple[str, ...]] = UNIVERSE,
+    engine: Engine | None = None,
+) -> dict:
+    """Обновляет справочник инструментов (upsert по тикеру)."""
+    engine = engine or db.get_engine()
+    rows = yfinance_source.fetch_instruments_meta(universe)
+    written = db.upsert_instruments(engine, rows)
+
+    logger.info("instruments: получено %d, записано %d", len(rows), written)
+    return {"source": "instruments", "tickers": len(rows), "written": written}
+
+
+def _stats(
     *,
     source: str,
+    window_start,
+    window_end,
+    fetched: int,
+    prepared: int,
+    written: int,
 ) -> dict:
-    if raw.empty:
-        logger.warning("%s: за %s..%s данных нет", source, window_start, window_end)
-
-    prices = dedupe_prices(fill_missing_dates(raw))
-    inserted = db.upsert_prices(engine, table_name, prices)
-
     stats = {
         "source": source,
-        "table": table_name,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
-        "fetched_rows": int(len(raw)),
-        "rows_to_load": int(len(prices)),
-        "inserted_rows": int(inserted),
+        "fetched_rows": int(fetched),
+        "rows_to_load": int(prepared),
+        "written_rows": int(written),
     }
     logger.info(
-        "%s: окно %s..%s, получено %d, к загрузке %d, вставлено %d",
+        "%s: окно %s..%s, получено %d, к загрузке %d, записано %d",
         source,
         window_start,
         window_end,
-        stats["fetched_rows"],
-        stats["rows_to_load"],
-        stats["inserted_rows"],
+        fetched,
+        prepared,
+        written,
     )
     return stats

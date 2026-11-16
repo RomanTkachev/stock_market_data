@@ -53,7 +53,7 @@ x-airflow-common:
   build: .
   environment:
     &airflow-common-env
-    # Строка подключения для загрузчиков (dags/scripts/*_loader.py). По умолчанию — сервис market-postgres
+    # Строка подключения для загрузчиков (etl/db.py). По умолчанию — сервис market-postgres
     DATABASE_URL: ${DATABASE_URL:-postgresql://market:market@market-postgres:5432/market}
     # Параметры БД с рыночными данными: их использует dbt (analytics/profiles.yml через env_var)
     DB_HOST: ${DB_HOST:-market-postgres}
@@ -61,7 +61,6 @@ x-airflow-common:
     DB_USER: ${DB_USER:-market}
     DB_PASS: ${DB_PASS:-market}
     DB_NAME: ${DB_NAME:-market}
-    MOEX_API_TOKEN: ${MOEX_API_TOKEN} #Прокидываем переменную окружения с данными токена API Мосбиржи
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
